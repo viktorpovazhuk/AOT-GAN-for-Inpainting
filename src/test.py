@@ -8,6 +8,7 @@ from glob import glob
 import torch
 import torch.nn as nn
 from torchvision.transforms import ToTensor
+from torchvision.transforms import Resize
 
 from utils.option import args 
 
@@ -20,14 +21,14 @@ def postprocess(image):
     return Image.fromarray(image)
 
 
-def main_worker(args, use_gpu=True): 
+def main_worker(args):
 
-    device = torch.device('cuda') if use_gpu else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
     # Model and version
     net = importlib.import_module('model.'+args.model)
-    model = net.InpaintGenerator(args).cuda()
-    model.load_state_dict(torch.load(args.pre_train, map_location='cuda'))
+    model = net.InpaintGenerator(args).to(device)
+    model.load_state_dict(torch.load(args.pre_train, map_location=device))
     model.eval()
 
     # prepare dataset
@@ -41,15 +42,19 @@ def main_worker(args, use_gpu=True):
     # iteration through datasets
     for ipath, mpath in zip(image_paths, mask_paths): 
         image = ToTensor()(Image.open(ipath).convert('RGB'))
+        image = Resize((512, 512))(image)
         image = (image * 2.0 - 1.0).unsqueeze(0)
         mask = ToTensor()(Image.open(mpath).convert('L'))
+        mask = Resize((512, 512))(mask)
         mask = mask.unsqueeze(0)
-        image, mask = image.cuda(), mask.cuda()
+        image, mask = image.to(device), mask.to(device)
         image_masked = image * (1 - mask.float()) + mask
         
         with torch.no_grad():
             pred_img = model(image_masked, mask)
 
+        print(pred_img.shape)
+        print(mask.shape)
         comp_imgs = (1 - mask) * image + mask * pred_img
         image_name = os.path.basename(ipath).split('.')[0]
         postprocess(image_masked[0]).save(os.path.join(args.outputs, f'{image_name}_masked.png'))
